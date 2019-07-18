@@ -158,9 +158,15 @@ export class Client {
   }
 
   reexecuteOperation = (operation: Operation) => {
+    console.log('client#reexecuteOperation');
     // Reexecute operation only if any subscribers are still subscribed to the
     // operation's exchange results
+    console.log(
+      '  this.activeOperations',
+      this.activeOperations[operation.key]
+    );
     if ((this.activeOperations[operation.key] || 0) > 0) {
+      console.log('  this.dispatchOperation', operation);
       this.dispatchOperation(operation);
     }
   };

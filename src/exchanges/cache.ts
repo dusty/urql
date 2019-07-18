@@ -3,11 +3,7 @@ import { filter, map, merge, pipe, share, tap } from 'wonka';
 
 import { Client } from '../client';
 import { Exchange, Operation, OperationResult } from '../types';
-import {
-  addMetadata,
-  collectTypesFromResponse,
-  formatDocument,
-} from '../utils';
+import { collectTypesFromResponse, formatDocument } from '../utils/typenames';
 
 type ResultCache = Map<number, OperationResult>;
 
@@ -15,8 +11,11 @@ interface OperationCache {
   [key: string]: Set<number>;
 }
 
-const shouldSkip = ({ operationName }: Operation) =>
-  operationName !== 'mutation' && operationName !== 'query';
+const shouldSkip = ({ operationName }: Operation) => {
+  const result = operationName !== 'mutation' && operationName !== 'query';
+  console.log('shouldSkip: ', result);
+  return result;
+};
 
 export const cacheExchange: Exchange = ({ forward, client }) => {
   const resultCache = new Map() as ResultCache;
@@ -42,11 +41,12 @@ export const cacheExchange: Exchange = ({ forward, client }) => {
       operationName,
       context: { requestPolicy },
     } = operation;
-    return (
+    const result =
       operationName === 'query' &&
       requestPolicy !== 'network-only' &&
-      (requestPolicy === 'cache-only' || resultCache.has(key))
-    );
+      (requestPolicy === 'cache-only' || resultCache.has(key));
+    console.log('isOperationCached: ', result);
+    return result;
   };
 
   return ops$ => {
@@ -56,25 +56,24 @@ export const cacheExchange: Exchange = ({ forward, client }) => {
       sharedOps$,
       filter(op => !shouldSkip(op) && isOperationCached(op)),
       map(operation => {
-        const { key, context } = operation;
+        const {
+          key,
+          context: { requestPolicy },
+        } = operation;
         const cachedResult = resultCache.get(key);
-        if (context.requestPolicy === 'cache-and-network') {
+        if (requestPolicy === 'cache-and-network') {
+          console.log('cachedOps#requestPolicyCheck', operation);
           reexecuteOperation(client, operation);
         }
 
         if (cachedResult !== undefined) {
-          return {
-            ...cachedResult,
-            operation: addMetadata(cachedResult.operation, {
-              cacheOutcome: 'hit',
-            }),
-          };
+          return cachedResult;
         }
 
         return {
+          operation,
           data: undefined,
           error: undefined,
-          operation: addMetadata(operation, { cacheOutcome: 'miss' }),
         };
       })
     );
@@ -91,7 +90,6 @@ export const cacheExchange: Exchange = ({ forward, client }) => {
           filter(op => shouldSkip(op))
         ),
       ]),
-      map(op => addMetadata(op, { cacheOutcome: 'miss' })),
       forward,
       tap(response => {
         if (
@@ -114,6 +112,7 @@ export const cacheExchange: Exchange = ({ forward, client }) => {
 
 // Reexecutes a given operation with the default requestPolicy
 const reexecuteOperation = (client: Client, operation: Operation) => {
+  console.log('cache#reexecuteOperation:', operation);
   return client.reexecuteOperation({
     ...operation,
     context: {
@@ -152,17 +151,19 @@ const afterQuery = (
   resultCache: ResultCache,
   operationCache: OperationCache
 ) => (response: OperationResult) => {
-  const { operation, data } = response;
-
+  const {
+    operation: { key },
+    data,
+  } = response;
   if (data === undefined) {
     return;
   }
 
-  resultCache.set(operation.key, response);
+  resultCache.set(key, response);
 
   collectTypesFromResponse(response.data).forEach(typeName => {
     const operations =
       operationCache[typeName] || (operationCache[typeName] = new Set());
-    operations.add(operation.key);
+    operations.add(key);
   });
 };
